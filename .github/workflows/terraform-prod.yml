@@ -16,10 +16,20 @@ name: terraform-prod
 on:
   pull_request:
     branches: [main]
-    paths: ["terraform/**", "scripts/**", ".github/workflows/terraform-prod.yml"]
+    paths:
+      - "terraform/**"
+      - "scripts/**"
+      - ".github/workflows/terraform-prod.yml"
+      - "!**/README.md" # README changes never trigger the pipeline
+      - "!**/readme.md"
   push:
     branches: [main]
-    paths: ["terraform/**", "scripts/**", ".github/workflows/terraform-prod.yml"]
+    paths:
+      - "terraform/**"
+      - "scripts/**"
+      - ".github/workflows/terraform-prod.yml"
+      - "!**/README.md" # README changes never trigger the pipeline
+      - "!**/readme.md"
   workflow_dispatch:
     inputs:
       action:
@@ -43,7 +53,7 @@ env:
   WORKDIR: terraform/environments/prod
   SECRET_ID: sushant-app/prod/ci-test-keys # AWS Secrets Manager, created outside Terraform
   SCRIPTS: ${{ github.workspace }}/scripts
-  LOG_GROUP: test_group # CloudWatch log group from terraform/bootstrap
+  LOG_GROUP: test_group # CloudWatch log group; run-logged.sh creates it if missing
   LOG_REGION: us-west-2 # bootstrap region, where the log group lives
   # Days to keep logs; applied on every run. Allowed: 1, 3, 5, 7, 14, 30, 60,
   # 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288, 3653.

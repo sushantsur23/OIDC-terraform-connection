@@ -3,7 +3,7 @@
 Deploy AWS infrastructure from GitHub Actions **without storing any AWS keys in GitHub**.
 GitHub proves who it is to AWS with a short-lived OpenID Connect (OIDC) token, and AWS hands back temporary credentials for one IAM role.
 
-The pipeline plans on every pull request. On every merge to `main` it applies, then destroys everything after a manual approval. Each step's output also goes to CloudWatch Logs.
+The pipeline plans on every pull request. On every merge to `main` it applies, destroys everything, and then deletes the pipeline logs. Each of those three steps waits for a manual approval. Each step's output also goes to CloudWatch Logs.
 
 ---
 
@@ -53,6 +53,7 @@ flowchart LR
     Push[Merge to main] --> P2[plan]
     P2 --> A{{Approval}} --> AP[apply]
     AP --> D{{Approval}} --> DS[destroy]
+    DS --> L{{Approval}} --> DL2[delete-logs]
     Manual[Run workflow button] -->|plan| P3[plan]
     Manual -->|destroy| D2{{Approval}} --> DM[destroy-manual]
     Manual -->|delete-logs| D3{{Approval}} --> DL[delete-logs]
@@ -64,7 +65,7 @@ flowchart LR
 | `apply` | Push to `main`, after `plan` | ✅ Yes | Applies the saved plan |
 | `destroy` | Push to `main`, after `apply` | ✅ Yes | Destroys everything in the prod stack |
 | `destroy-manual` | Manual run with **destroy** | ✅ Yes | Destroys everything, without needing a new apply first |
-| `delete-logs` | Manual run with **delete-logs** | ✅ Yes | Deletes the CloudWatch log group |
+| `delete-logs` | Push to `main`, after `destroy` succeeds, or manual run with **delete-logs** | ✅ Yes | Deletes the CloudWatch log group. Read the logs before you approve. |
 
 **What triggers a run:**
 
@@ -214,7 +215,7 @@ git commit -m "Configure project"
 git push origin main
 ```
 
-Open the **Actions** tab. `plan` runs on its own. `apply` and `destroy` each wait for your approval.
+Open the **Actions** tab. `plan` runs on its own. `apply`, `destroy` and `delete-logs` each wait for your approval.
 
 ---
 
@@ -307,6 +308,7 @@ Approval comes from **GitHub Environments**. Every job with `environment: prod` 
 
 - ⚠️ **No reviewers means no approval.** If `prod` has no required reviewers, the jobs start straight away.
 - ⏳ **Pending approvals expire after 30 days.** If nobody approves the destroy, your resources stay up and keep costing money.
+- 📖 **Read the logs before approving `delete-logs`.** It runs right after destroy and removes every stream in `test_group`. Click **Reject** to keep the logs. The run then shows as failed, but nothing else is affected.
 - 💳 **Required reviewers are free on public repositories.** Private repositories need a paid GitHub plan.
 - 🔁 **`apply` and `destroy` share one environment**, so the same people approve both. For separate approvers, create a second environment and add it to `allowed_environments` in `terraform/bootstrap/main.tf`, then run bootstrap again. The trust policy only accepts environments listed there.
 
@@ -320,7 +322,7 @@ Approval comes from **GitHub Environments**. Every job with `environment: prod` 
 |---|---|
 | `plan` (default) | Runs the plan only |
 | `destroy` | Destroys the prod stack immediately, after approval. Useful when an apply failed partway and the automatic destroy never ran. |
-| `delete-logs` | Deletes the `test_group` log group and all its streams, after approval. **This cannot be undone.** The next run creates a fresh, empty group. |
+| `delete-logs` | Deletes the `test_group` log group and all its streams, after approval. **This cannot be undone.** The next run creates a fresh, empty group. A push to `main` also offers this step after every successful destroy. |
 
 `destroy` and `delete-logs` only run from the `main` branch.
 

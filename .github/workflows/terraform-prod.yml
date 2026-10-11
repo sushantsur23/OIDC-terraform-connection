@@ -5,6 +5,7 @@
 #   plan        - plan only
 #   destroy     - destroy everything now, after approval on "prod"
 #   delete-logs - delete the CloudWatch log group, after approval on "prod"
+#                 (also offered after every destroy on push to main)
 # Setup in GitHub:
 #   1. Settings > Secrets and variables > Actions > Variables:
 #      AWS_ROLE_ARN = output `github_actions_role_arn` from terraform/bootstrap
@@ -146,12 +147,20 @@ jobs:
       - name: Terraform destroy
         run: bash "$SCRIPTS/run-logged.sh" terraform.sh destroy
 
-  # Manual log cleanup: Actions > terraform-prod > Run workflow > delete-logs.
+  # Log cleanup, after approval on "prod". Runs:
+  #   - on push to main, after destroy succeeds (approve once you've read the logs)
+  #   - from Actions > terraform-prod > Run workflow > delete-logs
   # Deletes test_group and all its streams; this cannot be undone. Not run
   # through run-logged.sh, which would recreate the group. The next pipeline
   # run creates a fresh, empty group.
   delete-logs:
-    if: github.event_name == 'workflow_dispatch' && inputs.action == 'delete-logs' && github.ref == 'refs/heads/main'
+    needs: destroy
+    # !cancelled() lets this job run on a manual trigger, when destroy is skipped.
+    if: >-
+      ${{ !cancelled() && github.ref == 'refs/heads/main' && (
+        (github.event_name == 'push' && needs.destroy.result == 'success') ||
+        (github.event_name == 'workflow_dispatch' && inputs.action == 'delete-logs')
+      ) }}
     runs-on: ubuntu-latest
     environment: prod
     steps:

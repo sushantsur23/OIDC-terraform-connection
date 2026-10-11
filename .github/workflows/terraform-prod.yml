@@ -1,4 +1,6 @@
-# Starter pipeline: plan on pull requests, apply on merge to main.
+# Pipeline: plan on pull requests; on merge to main, apply, wait 2 minutes,
+# then destroy. Step logic lives in scripts/, and run-logged.sh sends each
+# step's output to CloudWatch (log group test_group, one stream per process).
 # Setup in GitHub:
 #   1. Settings > Secrets and variables > Actions > Variables:
 #      AWS_ROLE_ARN = output `github_actions_role_arn` from terraform/bootstrap
@@ -10,10 +12,10 @@ name: terraform-prod
 on:
   pull_request:
     branches: [main]
-    paths: ["terraform/**", ".github/workflows/terraform-prod.yml"]
+    paths: ["terraform/**", "scripts/**", ".github/workflows/terraform-prod.yml"]
   push:
     branches: [main]
-    paths: ["terraform/**", ".github/workflows/terraform-prod.yml"]
+    paths: ["terraform/**", "scripts/**", ".github/workflows/terraform-prod.yml"]
   workflow_dispatch:
 
 permissions:
@@ -30,49 +32,29 @@ env:
   AWS_REGION: "us-east-1"
   WORKDIR: terraform/environments/prod
   SECRET_ID: sushant-app/prod/ci-test-keys # AWS Secrets Manager, created outside Terraform
+  SCRIPTS: ${{ github.workspace }}/scripts
+  LOG_GROUP: test_group # CloudWatch log group from terraform/bootstrap
+  LOG_REGION: us-west-2 # bootstrap region, where the log group lives
 
 jobs:
   plan:
     runs-on: ubuntu-latest # no environment here, so PR plans don't wait for approval
-    defaults:
-      run:
-        working-directory: ${{ env.WORKDIR }}
     steps:
       - uses: actions/checkout@v4
-
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-
-      # Creates the secret, or adds missing keys, with default values.
-      # Existing values are left untouched.
-      - name: Ensure secrets exist in AWS Secrets Manager
-        run: bash "$GITHUB_WORKSPACE/scripts/ensure-secrets.sh"
-
-      # Reads the keys and prints proof they arrived (values stay masked).
-      - name: Read secrets from AWS Secrets Manager
-        run: |
-          secret_json=$(aws secretsmanager get-secret-value --secret-id "$SECRET_ID" --query SecretString --output text)
-          for key in AWS_ACCESS_KEY AWS_SECRET_KEY; do
-            value=$(echo "$secret_json" | jq -r --arg k "$key" '.[$k] // empty')
-            if [ -z "$value" ]; then
-              echo "::error::$key not found in $SECRET_ID"
-              exit 1
-            fi
-            echo "::add-mask::$value"
-            echo "$key length: ${#value}"
-            echo "$key sha256: $(printf '%s' "$value" | sha256sum | cut -d' ' -f1)"
-          done
-
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
-      - run: terraform fmt -check -recursive ../..
-      - run: terraform init -input=false
-      - run: terraform validate
-      - run: terraform plan -input=false -out=tfplan
+      - name: Ensure secrets exist
+        run: bash "$SCRIPTS/run-logged.sh" ensure-secrets.sh
+      - name: Read secrets
+        run: bash "$SCRIPTS/run-logged.sh" read-secrets.sh
+      - name: Terraform plan
+        run: bash "$SCRIPTS/run-logged.sh" terraform.sh plan
 
       - uses: actions/upload-artifact@v4
         with:
@@ -85,51 +67,36 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: prod # add required reviewers on this environment for manual approval
-    defaults:
-      run:
-        working-directory: ${{ env.WORKDIR }}
     steps:
       - uses: actions/checkout@v4
-
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TF_VERSION }}
-
       - uses: actions/download-artifact@v4
         with:
           name: tfplan
           path: ${{ env.WORKDIR }}
 
-      - run: terraform init -input=false
-      - run: terraform apply -input=false tfplan
-  
+      - name: Terraform apply
+        run: bash "$SCRIPTS/run-logged.sh" terraform.sh apply
+
   destroy:
     needs: apply
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest # no environment, so it runs without a second approval
-    defaults:
-      run:
-        working-directory: ${{ env.WORKDIR }}
     steps:
       - uses: actions/checkout@v4
-
-      - uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ env.TF_VERSION }}
-
-      - name: Wait 2 minutes before destroying
-        run: sleep 120
-
-      # Assume the role after the wait so the session is fresh for the destroy.
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
 
-      - run: terraform init -input=false
-      - run: terraform destroy -input=false -auto-approve
+      - name: Wait 2 minutes, then terraform destroy
+        run: bash "$SCRIPTS/run-logged.sh" terraform.sh destroy

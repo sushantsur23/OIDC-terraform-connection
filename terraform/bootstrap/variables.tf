@@ -53,3 +53,15 @@ variable "state_prefix" {
   type        = string
   default     = "prod/terraform-lock"
 }
+
+variable "pipeline_log_group_name" {
+  description = "CloudWatch log group that receives pipeline logs."
+  type        = string
+  default     = "test_group"
+}
+
+variable "pipeline_log_retention_days" {
+  description = "Days to keep pipeline logs."
+  type        = number
+  default     = 30
+}

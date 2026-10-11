@@ -50,7 +50,7 @@ locals {
 data "aws_iam_policy_document" "pipeline_logs" {
   statement {
     sid       = "ManagePipelineLogGroup"
-    actions   = ["logs:CreateLogGroup", "logs:PutRetentionPolicy", "logs:DescribeLogGroups"]
+    actions   = ["logs:CreateLogGroup", "logs:PutRetentionPolicy", "logs:DescribeLogGroups", "logs:DeleteLogGroup"]
     resources = [local.pipeline_log_group_arn, "${local.pipeline_log_group_arn}:*"]
   }
 

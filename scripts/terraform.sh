@@ -4,7 +4,7 @@
 # Usage: terraform.sh plan | apply | destroy
 #   plan     fmt check, init, validate, plan saved to tfplan
 #   apply    init, apply the saved tfplan
-#   destroy  wait DESTROY_DELAY_SECONDS (default 120), init, destroy
+#   destroy  init, destroy (optional wait: DESTROY_DELAY_SECONDS, default 0)
 #
 # Settings: WORKDIR (default terraform/environments/prod), relative to repo root.
 
@@ -27,9 +27,11 @@ case "$stage" in
     terraform apply -input=false tfplan
     ;;
   destroy)
-    delay="${DESTROY_DELAY_SECONDS:-120}"
-    echo "Waiting ${delay}s before destroying..."
-    sleep "$delay"
+    delay="${DESTROY_DELAY_SECONDS:-0}"
+    if [ "$delay" -gt 0 ]; then
+      echo "Waiting ${delay}s before destroying..."
+      sleep "$delay"
+    fi
     terraform init -input=false
     terraform destroy -input=false -auto-approve
     ;;

@@ -7,7 +7,7 @@
 # Usage: run-logged.sh <script.sh> [args...]
 #
 # Settings: LOG_GROUP (default test_group), LOG_REGION (default AWS_REGION),
-#           LOG_RETENTION_DAYS (default 30, used when creating the group).
+#           LOG_RETENTION_DAYS (default 30, applied to the group on every run).
 # The log group is created automatically if it does not exist yet.
 # The script's exit code is kept. A failed upload only prints a warning.
 # Lines starting with ::add-mask:: are never sent, because they hold the raw
@@ -51,7 +51,7 @@ stamp_and_show() {
   done
 }
 
-# Creates the log group with a retention period. Safe if it already exists.
+# Creates the log group. Safe if it already exists.
 create_log_group() {
   local err="$work/err"
   echo "[run-logged] Log group '$LOG_GROUP' not found. Creating it."
@@ -59,6 +59,18 @@ create_log_group() {
       --log-group-name "$LOG_GROUP" 2>"$err"; then
     grep -q ResourceAlreadyExistsException "$err" || { warn "$(cat "$err")"; return 1; }
   fi
+}
+
+# Sets the group's retention to LOG_RETENTION_DAYS if it differs, so
+# changing the value in the workflow updates the existing group.
+ensure_retention() {
+  local err="$work/err" current
+  current=$(aws logs describe-log-groups --region "$LOG_REGION" \
+    --log-group-name-prefix "$LOG_GROUP" \
+    --query "logGroups[?logGroupName=='$LOG_GROUP'].retentionInDays | [0]" \
+    --output text 2>"$err") || { warn "$(cat "$err")"; return; }
+  [ "$current" = "$LOG_RETENTION_DAYS" ] && return
+  echo "[run-logged] Setting retention on '$LOG_GROUP' to $LOG_RETENTION_DAYS days (was: $current)."
   aws logs put-retention-policy --region "$LOG_REGION" --log-group-name "$LOG_GROUP" \
     --retention-in-days "$LOG_RETENTION_DAYS" 2>"$err" || warn "$(cat "$err")"
 }
@@ -81,6 +93,7 @@ upload() {
       return
     fi
   fi
+  ensure_retention
 
   [ -s "$work/raw.log" ] || { echo "[run-logged] No output to send."; return; }
 

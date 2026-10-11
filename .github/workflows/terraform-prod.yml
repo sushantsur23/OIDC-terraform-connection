@@ -1,14 +1,15 @@
-# Pipeline: plan on pull requests; on merge to main, apply, wait 2 minutes,
-# then destroy. Step logic lives in scripts/, and run-logged.sh sends each
+# Pipeline: plan on pull requests; on merge to main, apply, then destroy
+# once someone approves it. Step logic lives in scripts/, and run-logged.sh sends each
 # step's output to CloudWatch (log group test_group, one stream per process).
 # Manual run (Actions > terraform-prod > Run workflow) offers:
-#   plan    - plan only
-#   destroy - destroy everything now, after approval on the "prod" environment
+#   plan        - plan only
+#   destroy     - destroy everything now, after approval on "prod"
+#   delete-logs - delete the CloudWatch log group, after approval on "prod"
 # Setup in GitHub:
 #   1. Settings > Secrets and variables > Actions > Variables:
 #      AWS_ROLE_ARN = output `github_actions_role_arn` from terraform/bootstrap
 #   2. Settings > Environments: create "prod" and add required reviewers,
-#      so every apply waits for manual approval.
+#      so every apply and destroy waits for manual approval.
 
 name: terraform-prod
 
@@ -24,7 +25,7 @@ on:
       action:
         description: "What to run"
         type: choice
-        options: [plan, destroy]
+        options: [plan, destroy, delete-logs]
         default: plan
 
 permissions:
@@ -44,6 +45,9 @@ env:
   SCRIPTS: ${{ github.workspace }}/scripts
   LOG_GROUP: test_group # CloudWatch log group from terraform/bootstrap
   LOG_REGION: us-west-2 # bootstrap region, where the log group lives
+  # Days to keep logs; applied on every run. Allowed: 1, 3, 5, 7, 14, 30, 60,
+  # 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288, 3653.
+  LOG_RETENTION_DAYS: 30
 
 jobs:
   plan:
@@ -94,10 +98,12 @@ jobs:
       - name: Terraform apply
         run: bash "$SCRIPTS/run-logged.sh" terraform.sh apply
 
+  # Waits for a reviewer to click "Review deployments" > Approve.
   destroy:
     needs: apply
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest # no environment, so it runs without a second approval
+    runs-on: ubuntu-latest
+    environment: prod # required reviewers on "prod" give the approval button
     steps:
       - uses: actions/checkout@v4
       - uses: aws-actions/configure-aws-credentials@v4
@@ -108,7 +114,7 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
-      - name: Wait 2 minutes, then terraform destroy
+      - name: Terraform destroy
         run: bash "$SCRIPTS/run-logged.sh" terraform.sh destroy
 
   # Manual destroy button: Actions > terraform-prod > Run workflow > destroy.
@@ -128,6 +134,22 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
 
       - name: Terraform destroy
-        env:
-          DESTROY_DELAY_SECONDS: "0" # no wait for a manual destroy
         run: bash "$SCRIPTS/run-logged.sh" terraform.sh destroy
+
+  # Manual log cleanup: Actions > terraform-prod > Run workflow > delete-logs.
+  # Deletes test_group and all its streams; this cannot be undone. Not run
+  # through run-logged.sh, which would recreate the group. The next pipeline
+  # run creates a fresh, empty group.
+  delete-logs:
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'delete-logs' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: prod
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Delete CloudWatch log group
+        run: bash "$SCRIPTS/delete-log-group.sh"

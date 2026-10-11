@@ -1,6 +1,9 @@
 # Pipeline: plan on pull requests; on merge to main, apply, wait 2 minutes,
 # then destroy. Step logic lives in scripts/, and run-logged.sh sends each
 # step's output to CloudWatch (log group test_group, one stream per process).
+# Manual run (Actions > terraform-prod > Run workflow) offers:
+#   plan    - plan only
+#   destroy - destroy everything now, after approval on the "prod" environment
 # Setup in GitHub:
 #   1. Settings > Secrets and variables > Actions > Variables:
 #      AWS_ROLE_ARN = output `github_actions_role_arn` from terraform/bootstrap
@@ -17,6 +20,12 @@ on:
     branches: [main]
     paths: ["terraform/**", "scripts/**", ".github/workflows/terraform-prod.yml"]
   workflow_dispatch:
+    inputs:
+      action:
+        description: "What to run"
+        type: choice
+        options: [plan, destroy]
+        default: plan
 
 permissions:
   id-token: write # required for OIDC
@@ -38,6 +47,7 @@ env:
 
 jobs:
   plan:
+    if: github.event_name != 'workflow_dispatch' || inputs.action == 'plan'
     runs-on: ubuntu-latest # no environment here, so PR plans don't wait for approval
     steps:
       - uses: actions/checkout@v4
@@ -99,4 +109,25 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
 
       - name: Wait 2 minutes, then terraform destroy
+        run: bash "$SCRIPTS/run-logged.sh" terraform.sh destroy
+
+  # Manual destroy button: Actions > terraform-prod > Run workflow > destroy.
+  # Runs on main only, and waits for approval on the "prod" environment.
+  destroy-manual:
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'destroy' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: prod
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform destroy
+        env:
+          DESTROY_DELAY_SECONDS: "0" # no wait for a manual destroy
         run: bash "$SCRIPTS/run-logged.sh" terraform.sh destroy

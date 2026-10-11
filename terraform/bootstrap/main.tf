@@ -35,22 +35,29 @@ module "github_oidc" {
 }
 
 # ---------------------------------------------------------------------------
-# CloudWatch log group for pipeline logs, one log stream per process.
-# Kept in bootstrap so the pipeline's destroy job never deletes it.
+# Pipeline logs: scripts/run-logged.sh creates the CloudWatch log group on
+# first use and writes one log stream per process. This policy keeps that
+# working even if PowerUserAccess is removed from the role. The log group
+# lives in this stack's region, which must match LOG_REGION in the workflow.
 # ---------------------------------------------------------------------------
-resource "aws_cloudwatch_log_group" "pipeline" {
-  name              = var.pipeline_log_group_name
-  retention_in_days = var.pipeline_log_retention_days
+data "aws_caller_identity" "current" {}
+data "aws_region" "current" {}
 
-  tags = { Component = "ci-cd-logs" }
+locals {
+  pipeline_log_group_arn = "arn:aws:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:log-group:${var.pipeline_log_group_name}"
 }
 
-# Lets the pipeline role write its logs, even if PowerUserAccess is removed.
 data "aws_iam_policy_document" "pipeline_logs" {
+  statement {
+    sid       = "ManagePipelineLogGroup"
+    actions   = ["logs:CreateLogGroup", "logs:PutRetentionPolicy", "logs:DescribeLogGroups"]
+    resources = [local.pipeline_log_group_arn, "${local.pipeline_log_group_arn}:*"]
+  }
+
   statement {
     sid       = "WritePipelineLogs"
     actions   = ["logs:CreateLogStream", "logs:PutLogEvents", "logs:DescribeLogStreams"]
-    resources = ["${aws_cloudwatch_log_group.pipeline.arn}:*"]
+    resources = ["${local.pipeline_log_group_arn}:*"]
   }
 }
 

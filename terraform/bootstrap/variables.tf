@@ -60,8 +60,3 @@ variable "pipeline_log_group_name" {
   default     = "test_group"
 }
 
-variable "pipeline_log_retention_days" {
-  description = "Days to keep pipeline logs."
-  type        = number
-  default     = 30
-}

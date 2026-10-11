@@ -64,6 +64,9 @@ module "app_secret" {
   description = "Application configuration for ${local.name_prefix}"
   secret_keys = var.secret_keys
 
+  # Delete immediately on destroy, so the next apply can reuse the name.
+  recovery_window_in_days = 0
+
   tags = { Component = "secrets" }
 }
 

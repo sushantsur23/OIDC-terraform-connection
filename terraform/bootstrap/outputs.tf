@@ -4,6 +4,6 @@ output "github_actions_role_arn" {
 }
 
 output "pipeline_log_group_name" {
-  description = "CloudWatch log group for pipeline logs (LOG_GROUP in the workflow)."
-  value       = aws_cloudwatch_log_group.pipeline.name
+  description = "CloudWatch log group the pipeline writes to (LOG_GROUP in the workflow)."
+  value       = var.pipeline_log_group_name
 }

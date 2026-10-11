@@ -6,7 +6,9 @@
 #
 # Usage: run-logged.sh <script.sh> [args...]
 #
-# Settings: LOG_GROUP (default test_group), LOG_REGION (default AWS_REGION).
+# Settings: LOG_GROUP (default test_group), LOG_REGION (default AWS_REGION),
+#           LOG_RETENTION_DAYS (default 30, used when creating the group).
+# The log group is created automatically if it does not exist yet.
 # The script's exit code is kept. A failed upload only prints a warning.
 # Lines starting with ::add-mask:: are never sent, because they hold the raw
 # secret value that GitHub masks in its own logs. CloudWatch masks nothing.
@@ -24,6 +26,7 @@ for arg in "$@"; do process+="-$arg"; done
 
 LOG_GROUP="${LOG_GROUP:-test_group}"
 LOG_REGION="${LOG_REGION:-${AWS_REGION:-us-west-2}}"
+LOG_RETENTION_DAYS="${LOG_RETENTION_DAYS:-30}"
 STREAM="${GITHUB_RUN_ID:-local-$(date +%Y%m%d%H%M%S)}-${GITHUB_RUN_ATTEMPT:-1}/${GITHUB_JOB:-local}/${process}"
 
 work=$(mktemp -d)
@@ -48,11 +51,35 @@ stamp_and_show() {
   done
 }
 
+# Creates the log group with a retention period. Safe if it already exists.
+create_log_group() {
+  local err="$work/err"
+  echo "[run-logged] Log group '$LOG_GROUP' not found. Creating it."
+  if ! aws logs create-log-group --region "$LOG_REGION" \
+      --log-group-name "$LOG_GROUP" 2>"$err"; then
+    grep -q ResourceAlreadyExistsException "$err" || { warn "$(cat "$err")"; return 1; }
+  fi
+  aws logs put-retention-policy --region "$LOG_REGION" --log-group-name "$LOG_GROUP" \
+    --retention-in-days "$LOG_RETENTION_DAYS" 2>"$err" || warn "$(cat "$err")"
+}
+
+# Creates this process's log stream. Succeeds if it already exists.
+create_log_stream() {
+  aws logs create-log-stream --region "$LOG_REGION" \
+    --log-group-name "$LOG_GROUP" --log-stream-name "$STREAM" 2>"$work/err" && return 0
+  grep -q ResourceAlreadyExistsException "$work/err"
+}
+
 upload() {
   local err="$work/err" chunk
-  if ! aws logs create-log-stream --region "$LOG_REGION" \
-      --log-group-name "$LOG_GROUP" --log-stream-name "$STREAM" 2>"$err"; then
-    grep -q ResourceAlreadyExistsException "$err" || { warn "$(cat "$err")"; return; }
+  if ! create_log_stream; then
+    if grep -q ResourceNotFoundException "$err"; then
+      create_log_group || return
+      create_log_stream || { warn "$(cat "$err")"; return; }
+    else
+      warn "$(cat "$err")"
+      return
+    fi
   fi
 
   [ -s "$work/raw.log" ] || { echo "[run-logged] No output to send."; return; }
